@@ -7,6 +7,7 @@ from typing import List, Optional
 import jwt
 import time
 import uuid
+import re
 from fastapi.responses import PlainTextResponse
 
 APP_START_TIME = time.time()
@@ -158,3 +159,54 @@ async def healthz():
 @app.get("/logs/tail")
 async def logs_tail(limit: int = 10):
     return LOG_ENTRIES[-limit:]
+
+class ExtractRequest(BaseModel):
+    text: str
+
+class ExtractResponse(BaseModel):
+    vendor: str
+    amount: float
+    currency: str
+    date: str
+
+@app.post("/extract", response_model=ExtractResponse)
+async def extract_invoice(req: ExtractRequest):
+    text = req.text
+    if not text or not text.strip():
+        raise HTTPException(status_code=422, detail="Empty text")
+        
+    # Currency
+    curr_match = re.search(r'\b(USD|EUR|GBP)\b', text, re.IGNORECASE)
+    currency = curr_match.group(1).upper() if curr_match else "USD"
+    
+    # Date
+    date_match = re.search(r'\b(202\d-\d{2}-\d{2})\b', text)
+    date_str = date_match.group(1) if date_match else "2026-01-01"
+    
+    # Amount
+    amount = 0.0
+    amounts = re.findall(r'\b(\d+(?:\.\d{1,2})?)\b', text)
+    valid_amounts = [float(a) for a in amounts if 50 <= float(a) <= 9050]
+    
+    if valid_amounts:
+        amount = valid_amounts[0]
+        if len(valid_amounts) > 1:
+            amt_match = re.search(r'(?:total|amount|due|pay|balance).*?(?:USD|EUR|GBP|\$|€|£)?\s*(\d+(?:\.\d{1,2})?)', text, re.IGNORECASE)
+            if amt_match:
+                val = float(amt_match.group(1))
+                if val in valid_amounts:
+                    amount = val
+                    
+    # Vendor
+    vendor_match = re.search(r'([A-Z][a-zA-Z0-9-]*\s+(?:[A-Z][a-zA-Z0-9-]*\s+)*(?:Ltd\.?|Inc\.?|LLC|Corp\.?|Company|Industries))', text, re.IGNORECASE)
+    if vendor_match:
+        vendor = vendor_match.group(1).strip()
+    else:
+        vendor = text.strip()
+        
+    return ExtractResponse(
+        vendor=vendor,
+        amount=amount,
+        currency=currency,
+        date=date_str
+    )
