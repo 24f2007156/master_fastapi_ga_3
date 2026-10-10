@@ -13,6 +13,8 @@ from fastapi.responses import PlainTextResponse
 APP_START_TIME = time.time()
 REQUEST_COUNT = 0
 LOG_ENTRIES = []
+IDEMPOTENCY_STORE = {}
+RATE_LIMIT_STORE = {}
 
 PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2okOHspNjgA+2rTLbeuY
@@ -43,14 +45,14 @@ class CustomHeaderMiddleware(BaseHTTPMiddleware):
         if len(LOG_ENTRIES) > 1000:
             LOG_ENTRIES.pop(0)
             
-        if request.method == "OPTIONS" and request.url.path == "/analytics":
+        if request.method == "OPTIONS" and (request.url.path == "/analytics" or request.url.path.startswith("/orders")):
             response = Response(status_code=200)
             response.headers["Access-Control-Allow-Origin"] = "*"
             response.headers["Access-Control-Allow-Methods"] = "*"
             response.headers["Access-Control-Allow-Headers"] = "*"
         else:
             response = await call_next(request)
-            if request.url.path == "/analytics":
+            if request.url.path == "/analytics" or request.url.path.startswith("/orders"):
                 response.headers["Access-Control-Allow-Origin"] = "*"
         
         process_time = time.time() - start_time
@@ -210,3 +212,61 @@ async def extract_invoice(req: ExtractRequest):
         currency=currency,
         date=date_str
     )
+
+def check_rate_limit(client_id: str):
+    if not client_id:
+        client_id = "unknown"
+    now = time.time()
+    if client_id not in RATE_LIMIT_STORE:
+        RATE_LIMIT_STORE[client_id] = []
+        
+    RATE_LIMIT_STORE[client_id] = [ts for ts in RATE_LIMIT_STORE[client_id] if now - ts < 10]
+    
+    if len(RATE_LIMIT_STORE[client_id]) >= 17:
+        raise HTTPException(
+            status_code=429, 
+            detail="Too Many Requests", 
+            headers={"Retry-After": "10"}
+        )
+        
+    RATE_LIMIT_STORE[client_id].append(now)
+
+@app.post("/orders", status_code=201)
+async def create_order(
+    idempotency_key: str = Header(None, alias="Idempotency-Key"),
+    x_client_id: str = Header(None)
+):
+    check_rate_limit(x_client_id)
+    
+    if idempotency_key and idempotency_key in IDEMPOTENCY_STORE:
+        return {"id": IDEMPOTENCY_STORE[idempotency_key]}
+    
+    new_id = f"ord_{uuid.uuid4().hex[:8]}"
+    if idempotency_key:
+        IDEMPOTENCY_STORE[idempotency_key] = new_id
+    
+    return {"id": new_id}
+
+@app.get("/orders")
+async def get_orders(
+    x_client_id: str = Header(None),
+    limit: int = 10,
+    cursor: str = None
+):
+    check_rate_limit(x_client_id)
+    
+    total_orders = 47
+    all_orders = [{"id": i} for i in range(1, total_orders + 1)]
+    
+    start_idx = 0
+    if cursor and cursor.isdigit():
+        start_idx = int(cursor)
+        
+    end_idx = start_idx + limit
+    items = all_orders[start_idx:end_idx]
+    
+    res = {"items": items}
+    if end_idx < total_orders:
+        res["next_cursor"] = str(end_idx)
+        
+    return res
