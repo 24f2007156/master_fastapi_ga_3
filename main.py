@@ -32,7 +32,7 @@ app.add_middleware(CustomHeaderMiddleware)
 async def get_stats(values: str):
     nums = [int(x) for x in values.split(",")]
     return {
-        "email": "sayamansari78300@gmail.com",
+        "email": "24f2007156@ds.study.iitm.ac.in",
         "count": len(nums),
         "sum": sum(nums),
         "min": min(nums),
