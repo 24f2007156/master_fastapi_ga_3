@@ -1,8 +1,9 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from typing import List, Optional
 import jwt
 import time
 import uuid
@@ -24,7 +25,15 @@ class CustomHeaderMiddleware(BaseHTTPMiddleware):
         start_time = time.time()
         request_id = str(uuid.uuid4())
         
-        response = await call_next(request)
+        if request.method == "OPTIONS" and request.url.path == "/analytics":
+            response = Response(status_code=200)
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = "*"
+            response.headers["Access-Control-Allow-Headers"] = "*"
+        else:
+            response = await call_next(request)
+            if request.url.path == "/analytics":
+                response.headers["Access-Control-Allow-Origin"] = "*"
         
         process_time = time.time() - start_time
         response.headers["X-Process-Time"] = str(process_time)
@@ -74,3 +83,42 @@ async def verify_token(request: TokenRequest):
         }
     except jwt.PyJWTError:
         return JSONResponse(status_code=401, content={"valid": False})
+
+class Event(BaseModel):
+    user: str
+    amount: float
+    ts: int
+
+class AnalyticsRequest(BaseModel):
+    events: List[Event]
+
+@app.post("/analytics")
+async def analytics(
+    request: AnalyticsRequest, 
+    x_api_key: str = Header(None)
+):
+    if x_api_key != "ak_4vgkhb5g9lomgw0pmyvyv2ku":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
+    events = request.events
+    total_events = len(events)
+    unique_users = len(set(e.user for e in events))
+    
+    revenue = sum(e.amount for e in events if e.amount > 0)
+    
+    user_revenue = {}
+    for e in events:
+        if e.amount > 0:
+            user_revenue[e.user] = user_revenue.get(e.user, 0) + e.amount
+            
+    top_user = ""
+    if user_revenue:
+        top_user = max(user_revenue.items(), key=lambda x: x[1])[0]
+        
+    return {
+        "email": "24f2007156@ds.study.iitm.ac.in",
+        "total_events": total_events,
+        "unique_users": unique_users,
+        "revenue": revenue,
+        "top_user": top_user
+    }
