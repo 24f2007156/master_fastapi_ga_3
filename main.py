@@ -34,7 +34,11 @@ class CustomHeaderMiddleware(BaseHTTPMiddleware):
         REQUEST_COUNT += 1
         
         start_time = time.time()
-        request_id = str(uuid.uuid4())
+        
+        request_id = request.headers.get("x-request-id")
+        if not request_id:
+            request_id = str(uuid.uuid4())
+        request.state.request_id = request_id
         
         LOG_ENTRIES.append({
             "level": "INFO",
@@ -45,9 +49,15 @@ class CustomHeaderMiddleware(BaseHTTPMiddleware):
         if len(LOG_ENTRIES) > 1000:
             LOG_ENTRIES.pop(0)
             
-        if request.method == "OPTIONS" and (request.url.path == "/analytics" or request.url.path.startswith("/orders")):
+        origin = request.headers.get("origin")
+            
+        if request.method == "OPTIONS" and (request.url.path == "/analytics" or request.url.path.startswith("/orders") or request.url.path == "/ping"):
             response = Response(status_code=200)
-            response.headers["Access-Control-Allow-Origin"] = "*"
+            if request.url.path == "/ping":
+                if origin == "https://app-ejttto.example.com" or (origin and "workers.dev" in origin):
+                    response.headers["Access-Control-Allow-Origin"] = origin
+            else:
+                response.headers["Access-Control-Allow-Origin"] = "*"
             response.headers["Access-Control-Allow-Methods"] = "*"
             response.headers["Access-Control-Allow-Headers"] = "*"
             response.headers["Access-Control-Expose-Headers"] = "Retry-After, X-Process-Time, X-Request-ID"
@@ -55,6 +65,9 @@ class CustomHeaderMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             if request.url.path == "/analytics" or request.url.path.startswith("/orders"):
                 response.headers["Access-Control-Allow-Origin"] = "*"
+            elif request.url.path == "/ping":
+                if origin == "https://app-ejttto.example.com" or (origin and "workers.dev" in origin):
+                    response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Expose-Headers"] = "Retry-After, X-Process-Time, X-Request-ID"
         
         process_time = time.time() - start_time
@@ -215,7 +228,7 @@ async def extract_invoice(req: ExtractRequest):
         date=date_str
     )
 
-def check_rate_limit(client_id: str):
+def check_rate_limit(client_id: str, limit: int = 17):
     if not client_id:
         client_id = "unknown"
     now = time.time()
@@ -224,7 +237,7 @@ def check_rate_limit(client_id: str):
         
     RATE_LIMIT_STORE[client_id] = [ts for ts in RATE_LIMIT_STORE[client_id] if now - ts < 10]
     
-    if len(RATE_LIMIT_STORE[client_id]) >= 17:
+    if len(RATE_LIMIT_STORE[client_id]) >= limit:
         raise HTTPException(
             status_code=429, 
             detail="Too Many Requests", 
@@ -272,3 +285,11 @@ async def get_orders(
         res["next_cursor"] = str(end_idx)
         
     return res
+
+@app.get("/ping")
+async def ping(request: Request, x_client_id: str = Header(None)):
+    check_rate_limit(f"ping_{x_client_id}", limit=14)
+    return {
+        "email": "24f2007156@ds.study.iitm.ac.in",
+        "request_id": request.state.request_id
+    }
