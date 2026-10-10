@@ -50,10 +50,12 @@ class CustomHeaderMiddleware(BaseHTTPMiddleware):
             response.headers["Access-Control-Allow-Origin"] = "*"
             response.headers["Access-Control-Allow-Methods"] = "*"
             response.headers["Access-Control-Allow-Headers"] = "*"
+            response.headers["Access-Control-Expose-Headers"] = "Retry-After, X-Process-Time, X-Request-ID"
         else:
             response = await call_next(request)
             if request.url.path == "/analytics" or request.url.path.startswith("/orders"):
                 response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Expose-Headers"] = "Retry-After, X-Process-Time, X-Request-ID"
         
         process_time = time.time() - start_time
         response.headers["X-Process-Time"] = str(process_time)
