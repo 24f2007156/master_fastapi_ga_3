@@ -7,6 +7,11 @@ from typing import List, Optional
 import jwt
 import time
 import uuid
+from fastapi.responses import PlainTextResponse
+
+APP_START_TIME = time.time()
+REQUEST_COUNT = 0
+LOG_ENTRIES = []
 
 PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2okOHspNjgA+2rTLbeuY
@@ -22,9 +27,21 @@ app = FastAPI()
 
 class CustomHeaderMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        global REQUEST_COUNT
+        REQUEST_COUNT += 1
+        
         start_time = time.time()
         request_id = str(uuid.uuid4())
         
+        LOG_ENTRIES.append({
+            "level": "INFO",
+            "ts": start_time,
+            "path": request.url.path,
+            "request_id": request_id
+        })
+        if len(LOG_ENTRIES) > 1000:
+            LOG_ENTRIES.pop(0)
+            
         if request.method == "OPTIONS" and request.url.path == "/analytics":
             response = Response(status_code=200)
             response.headers["Access-Control-Allow-Origin"] = "*"
@@ -122,3 +139,22 @@ async def analytics(
         "revenue": revenue,
         "top_user": top_user
     }
+
+@app.get("/work")
+async def work(n: int):
+    # Do K units of work (mock)
+    for _ in range(n):
+        pass
+    return {"email": "24f2007156@ds.study.iitm.ac.in", "done": n}
+
+@app.get("/metrics", response_class=PlainTextResponse)
+async def metrics():
+    return f"# HELP http_requests_total Total number of HTTP requests\n# TYPE http_requests_total counter\nhttp_requests_total {REQUEST_COUNT}\n"
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok", "uptime_s": time.time() - APP_START_TIME}
+
+@app.get("/logs/tail")
+async def logs_tail(limit: int = 10):
+    return LOG_ENTRIES[-limit:]
